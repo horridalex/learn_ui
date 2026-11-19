@@ -23,7 +23,7 @@ jobs:
 
       - name: Build (unsigned, device)
         run: |
-          set -o pipefail
+          set +e
           xcodebuild \
             -project LearnUI.xcodeproj \
             -scheme LearnUI \
@@ -32,8 +32,10 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee build.log | grep -E "error:|warning: .*deprecated|\*\* BUILD" || true
-          test ${PIPESTATUS[0]} -eq 0
+            build > build.log 2>&1
+          status=$?
+          grep -E "error:|\*\* BUILD" build.log | head -100
+          exit $status
 
       - name: Show errors
         if: failure()
