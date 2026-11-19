@@ -7,6 +7,28 @@ import UserNotifications
 struct BadgeDemo: View {
     @State private var count = 3
     @State private var realNote: String? = nil
+    @State private var needsSettings = false
+
+    private func applyRealBadge(_ n: Int) {
+        NotificationManager.shared.setBadge(n) { result in
+            switch result {
+            case .ok:
+                needsSettings = false
+                realNote = n == 0
+                    ? "진짜 앱 아이콘의 배지를 지웠어요."
+                    : "진짜 앱 아이콘에 배지 \(n)을 달았어요! 홈 화면으로 나가서 ‘UI 도감’ 아이콘 오른쪽 위를 보세요."
+            case .denied:
+                needsSettings = true
+                realNote = "알림 권한이 꺼져 있어서 배지를 달 수 없어요. 아래 ‘알림 설정 열기’에서 알림 허용을 켜주세요."
+            case .badgeOff:
+                needsSettings = true
+                realNote = "알림은 허용됐지만 ‘배지’ 스위치가 꺼져 있어요. 아래 ‘알림 설정 열기’에서 ‘배지’를 켜주세요."
+            case .failed(let message):
+                needsSettings = false
+                realNote = "iOS가 배지 설정을 거절했어요 (\(message)). 예비 방법으로 한 번 더 시도했으니 홈 화면을 확인해 보세요."
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -69,14 +91,25 @@ struct BadgeDemo: View {
             Button("숫자 확 늘리기 (120개)") { withAnimation { count = 120 } }
                 .buttonStyle(DSButtonStyle(kind: .ghost, compact: true))
             DemoNote(text: realNote ?? (count > 99 ? "숫자가 너무 크면 ‘99+’로 줄여 보여줘요." : "배지는 ‘몇 개’인지 숫자로 알려줘요. 지금 \(count)개."))
-            Button {
-                NotificationManager.shared.setBadge(count) { ok in
-                    realNote = ok ? "진짜 앱 아이콘에 배지 \(count)를 달았어요! 홈 화면에서 ‘UI 도감’ 아이콘을 보세요. (0으로 하면 지워져요)" : "알림 권한이 필요해요. 설정에서 허용해 주세요."
+            HStack(spacing: 8) {
+                Button { applyRealBadge(max(count, 1)) } label: {
+                    Label("진짜 아이콘에 배지 달기", systemImage: "app.badge")
                 }
-            } label: {
-                Label("진짜 앱 아이콘에 배지 달기", systemImage: "app.badge")
+                .buttonStyle(DSButtonStyle(kind: .secondary))
+                Button("지우기") { applyRealBadge(0) }
+                    .buttonStyle(DSButtonStyle(kind: .ghost))
+                    .frame(width: 84)
             }
-            .buttonStyle(DSButtonStyle(kind: .secondary))
+            if needsSettings {
+                Button {
+                    if let url = URL(string: UIApplication.openNotificationSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                } label: {
+                    Label("알림 설정 열기", systemImage: "gearshape")
+                }
+                .buttonStyle(DSButtonStyle(kind: .primary))
+            }
         }
     }
 }
@@ -790,15 +823,34 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func setBadge(_ count: Int, completion: @escaping (Bool) -> Void) {
+    enum BadgeResult { case ok, denied, badgeOff, failed(String) }
+
+    /// 앱 아이콘 배지 숫자를 바꿔요. 권한·설정 상태를 확인해서 왜 안 되는지도 알려줘요.
+    func setBadge(_ count: Int, completion: @escaping (BadgeResult) -> Void) {
         let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.badge, .alert, .sound]) { granted, _ in
-            guard granted else {
-                DispatchQueue.main.async { completion(false) }
-                return
+        let finish: (BadgeResult) -> Void = { r in DispatchQueue.main.async { completion(r) } }
+
+        func apply() {
+            center.getNotificationSettings { settings in
+                if settings.authorizationStatus == .denied { finish(.denied); return }
+                if settings.badgeSetting == .disabled { finish(.badgeOff); return }
+                center.setBadgeCount(count) { error in
+                    if let error {
+                        // 예비 방법: 예전 API로 한 번 더 시도
+                        DispatchQueue.main.async { UIApplication.shared.applicationIconBadgeNumber = count }
+                        finish(.failed(error.localizedDescription))
+                    } else {
+                        finish(.ok)
+                    }
+                }
             }
-            center.setBadgeCount(count) { _ in
-                DispatchQueue.main.async { completion(true) }
+        }
+
+        center.getNotificationSettings { settings in
+            if settings.authorizationStatus == .notDetermined {
+                center.requestAuthorization(options: [.badge, .alert, .sound]) { _, _ in apply() }
+            } else {
+                apply()
             }
         }
     }
